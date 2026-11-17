@@ -6,7 +6,7 @@
  * кнопки: кипячение, меню пресетов чая, меню настроек (звук, подсветка, блокировка).
  */
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
 
 const DEFAULT_PRESETS = {
   black_tea:      { name: "Чёрный чай",       temp: 100 },
@@ -73,6 +73,63 @@ class KettleMushroomCard extends HTMLElement {
 
   static getStubConfig() {
     return { entity: "water_heater.kettle" };
+  }
+
+  static getConfigForm() {
+    const entitySel = (domain) => ({
+      entity: { filter: { domain } },
+    });
+    return {
+      schema: [
+        {
+          name: "entity",
+          required: true,
+          selector: entitySel("water_heater"),
+        },
+        { name: "name", selector: { text: {} } },
+        {
+          name: "volume_max",
+          selector: {
+            number: {
+              min: 0.3,
+              max: 5,
+              step: 0.1,
+              mode: "box",
+              unit_of_measurement: "л",
+            },
+          },
+        },
+        {
+          name: "entities",
+          type: "expandable",
+          title: "Сущности (переопределение)",
+          schema: [
+            { name: "temperature_entity", selector: entitySel("sensor") },
+            { name: "volume_entity", selector: entitySel("sensor") },
+            { name: "power_entity", selector: entitySel("switch") },
+            { name: "preset_entity", selector: entitySel("select") },
+            { name: "base_entity", selector: entitySel("binary_sensor") },
+            { name: "sound_entity", selector: entitySel("switch") },
+            { name: "backlight_entity", selector: entitySel("switch") },
+            { name: "lock_entity", selector: entitySel("switch") },
+          ],
+        },
+      ],
+      computeLabel: (schema) =>
+        ({
+          entity: "Чайник (water_heater)",
+          name: "Название",
+          volume_max: "Максимальный объём",
+          temperature_entity: "Датчик температуры",
+          volume_entity: "Датчик объёма воды",
+          power_entity: "Переключатель кипячения",
+          preset_entity: "Пресеты (select)",
+          base_entity: "Датчик базы",
+          sound_entity: "Звук",
+          backlight_entity: "Подсветка",
+          lock_entity: "Защита от детей",
+        }[schema.name] || schema.name),
+    };
   }
 
   setConfig(config) {
@@ -159,16 +216,18 @@ class KettleMushroomCard extends HTMLElement {
 
     const name = cfg.name || (heater && heater.attributes.friendly_name) || "Чайник";
 
+    // binary_sensor.kettle_base: on = чайник СНЯТ с базы, off = на базе
+    const offBase = baseSt ? baseSt.state === "on" : false;
+
     let stateText;
     if (!heater || heater.state === "unavailable") {
       stateText = "Недоступен";
+    } else if (offBase) {
+      stateText = "Снят с базы";
     } else if (heating) {
       stateText = targetTemp ? `Нагрев до ${Math.round(targetTemp)}°C` : "Нагрев";
     } else {
       stateText = "Выключен";
-    }
-    if (baseSt) {
-      stateText += baseSt.state === "on" ? " · на базе" : " · снят с базы";
     }
 
     const iconColor = heating ? "#ff5722" : "var(--secondary-text-color)";
@@ -268,6 +327,11 @@ class KettleMushroomCard extends HTMLElement {
           color: ${heating ? "#ff7043" : "var(--primary-text-color)"};
         }
         .abtn.open { background: color-mix(in srgb, var(--secondary-text-color) 12%, transparent); }
+        .abtn.disabled {
+          opacity: .4;
+          pointer-events: none;
+          cursor: default;
+        }
         .menu {
           position: absolute; left: 8px; right: 8px; bottom: -8px;
           transform: translateY(100%);
@@ -313,21 +377,23 @@ class KettleMushroomCard extends HTMLElement {
           <div class="temp">${curTemp != null ? this._fmtTemp(curTemp) : "—"}<small> °C</small></div>
         </div>
 
+        ${offBase ? "" : `
         <div class="vol-row">
           ${svg(ICONS.water, "#03a9f4")}
           <div class="bar"><div style="width:${volPct}%"></div></div>
           <span class="v">${isNaN(volume) ? "—" : volume.toFixed(2) + " л"}</span>
         </div>
+        `}
 
         <div class="btns">
-          <div class="abtn main" id="boil">
+          <div class="abtn main${offBase ? " disabled" : ""}" id="boil">
             ${svg(ICONS.boil, heating ? "#ff7043" : "var(--primary-text-color)")}
             ${heating ? "Остановить" : "Кипятить"}
           </div>
-          <div class="abtn${presetsOpen ? " open" : ""}" id="presets">
+          <div class="abtn${presetsOpen ? " open" : ""}${offBase ? " disabled" : ""}" id="presets">
             ${svg(ICONS.tea, "var(--primary-text-color)")}Пресеты
           </div>
-          <div class="abtn${settingsOpen ? " open" : ""}" id="settings" style="flex:0 0 46px;">
+          <div class="abtn${settingsOpen ? " open" : ""}${offBase ? " disabled" : ""}" id="settings" style="flex:0 0 46px;">
             ${svg(ICONS.dots, "var(--primary-text-color)")}
           </div>
         </div>
@@ -341,6 +407,7 @@ class KettleMushroomCard extends HTMLElement {
     const $ = (sel) => this.shadowRoot.querySelector(sel);
 
     $("#boil").addEventListener("click", () => {
+      if (offBase) return;
       const st = this._state(e.power);
       if (st) {
         this._call("switch", "toggle", { entity_id: e.power });
