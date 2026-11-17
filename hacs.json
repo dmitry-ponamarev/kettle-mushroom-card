@@ -1,0 +1,6 @@
+{
+  "name": "Kettle Mushroom Card",
+  "filename": "kettle-mushroom-card.js",
+  "render_readme": true,
+  "homeassistant": "2023.4.0"
+}
