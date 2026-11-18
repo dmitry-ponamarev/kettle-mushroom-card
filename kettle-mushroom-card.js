@@ -1,12 +1,14 @@
 /*
  * Kettle Mushroom Card — минималистичная карточка чайника в стиле Mushroom
- * для Home Assistant (тестировалась на SkyKettle / Redmond).
+ * для Home Assistant (тестировалась на Polaris PWK-1775CGLD).
  *
  * Отображает текущую температуру, объём воды, состояние;
  * кнопки: кипячение, меню пресетов чая, меню настроек (звук, подсветка, блокировка).
+ * Иконка: по умолчанию из сущности; можно задать одну (icon) или по состояниям
+ * (icon_off / icon_heating / icon_unavailable либо словарь icons).
  */
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.2.0";
 
 const DEFAULT_PRESETS = {
   black_tea:      { name: "Чёрный чай",       temp: 100 },
@@ -52,23 +54,42 @@ class KettleMushroomCard extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._openMenu = null; // 'presets' | 'settings' | null
+    this._ptrDown = false;
+    this._needRender = false;
+    this._lastSig = null;
     this._onDocClick = (ev) => {
-      if (!this.shadowRoot.contains(ev.target) || !ev.composedPath().includes(this)) {
-        // клик вне карточки
-        if (this._openMenu) {
-          this._openMenu = null;
-          this._render();
-        }
+      // клик вне карточки закрывает открытое меню.
+      // ВАЖНО: composedPath для кликов внутри shadow DOM содержит хост-карточку,
+      // поэтому меню не закрывается и DOM не пересоздаётся до обработчиков кнопок.
+      if (this._openMenu && !ev.composedPath().includes(this)) {
+        this._openMenu = null;
+        this._render();
+      }
+    };
+    // не перерисовывать карточку между pointerdown и pointerup,
+    // иначе re-render обрывает клик (температура обновляется часто)
+    this._onPtrDown = () => { this._ptrDown = true; };
+    this._onPtrUp = () => {
+      this._ptrDown = false;
+      if (this._needRender) {
+        this._needRender = false;
+        this._render(true);
       }
     };
   }
 
   connectedCallback() {
     document.addEventListener("click", this._onDocClick, true);
+    this.addEventListener("pointerdown", this._onPtrDown, true);
+    window.addEventListener("pointerup", this._onPtrUp);
+    window.addEventListener("pointercancel", this._onPtrUp);
   }
 
   disconnectedCallback() {
     document.removeEventListener("click", this._onDocClick, true);
+    this.removeEventListener("pointerdown", this._onPtrDown, true);
+    window.removeEventListener("pointerup", this._onPtrUp);
+    window.removeEventListener("pointercancel", this._onPtrUp);
   }
 
   static getStubConfig() {
@@ -99,6 +120,17 @@ class KettleMushroomCard extends HTMLElement {
             },
           },
         },
+        { name: "icon", selector: { icon: {} } },
+        {
+          name: "icons_by_state",
+          type: "expandable",
+          title: "Иконки по состояниям",
+          schema: [
+            { name: "icon_off", selector: { icon: {} } },
+            { name: "icon_heating", selector: { icon: {} } },
+            { name: "icon_unavailable", selector: { icon: {} } },
+          ],
+        },
         {
           name: "entities",
           type: "expandable",
@@ -120,6 +152,10 @@ class KettleMushroomCard extends HTMLElement {
           entity: "Чайник (water_heater)",
           name: "Название",
           volume_max: "Максимальный объём",
+          icon: "Иконка (одна для всех состояний)",
+          icon_off: "Иконка: выключен",
+          icon_heating: "Иконка: нагрев",
+          icon_unavailable: "Иконка: недоступен",
           temperature_entity: "Датчик температуры",
           volume_entity: "Датчик объёма воды",
           power_entity: "Переключатель кипячения",
@@ -147,7 +183,8 @@ class KettleMushroomCard extends HTMLElement {
       backlight: config.backlight_entity || null,
       lock: config.lock_entity || `switch.${prefix}_child_lock`,
     };
-    this._render();
+    this._lastSig = null;
+    this._render(true);
   }
 
   set hass(hass) {
@@ -186,8 +223,24 @@ class KettleMushroomCard extends HTMLElement {
     return isNaN(n) ? "—" : String(Math.round(n));
   }
 
-  _render() {
+  // Приоритет: icons[state] -> icons.default -> icon -> icon_* -> иконка сущности -> default
+  _resolveIcon(stateKey, heater) {
+    const cfg = this._config;
+    if (cfg.icons && cfg.icons[stateKey]) return cfg.icons[stateKey];
+    if (cfg["icon_" + stateKey]) return cfg["icon_" + stateKey];
+    if (cfg.icons && cfg.icons.default) return cfg.icons.default;
+    if (cfg.icon) return cfg.icon;
+    if (heater && heater.attributes.icon) return heater.attributes.icon;
+    return "mdi:kettle";
+  }
+
+  _render(force) {
     if (!this._config || !this._hass || !this.shadowRoot) return;
+    if (this._ptrDown && !force) {
+      // палец/кнопка нажаты — отложим перерисовку, чтобы не оборвать клик
+      this._needRender = true;
+      return;
+    }
     const cfg = this._config;
     const e = this._e;
 
@@ -229,6 +282,22 @@ class KettleMushroomCard extends HTMLElement {
     } else {
       stateText = "Выключен";
     }
+
+    const unavailable = !heater || heater.state === "unavailable";
+    const stateKey = unavailable ? "unavailable" : heating ? "heating" : "off";
+    const icon = this._resolveIcon(stateKey, heater);
+
+    // не перерисовываем, если ничего значимого не изменилось —
+    // защита кликов от частых обновлений температуры
+    const sig = [
+      name, stateText, this._fmtTemp(curTemp), volPct,
+      isNaN(volume) ? "" : volume.toFixed(2),
+      heating, unavailable, offBase, icon, this._openMenu,
+      this._state(e.sound)?.state, this._state(e.backlight)?.state, this._state(e.lock)?.state,
+      presetSt && presetSt.state,
+    ].join("|");
+    if (!force && sig === this._lastSig) return;
+    this._lastSig = sig;
 
     const iconColor = heating ? "#ff5722" : "var(--secondary-text-color)";
     const iconBg = heating
@@ -287,7 +356,11 @@ class KettleMushroomCard extends HTMLElement {
           flex-shrink: 0; transition: background .3s;
           background: ${iconBg};
         }
-        .shape svg { width: 24px; height: 24px; }
+        .shape ha-icon {
+          --mdc-icon-size: 24px;
+          color: ${iconColor};
+          transition: color .3s;
+        }
         .names { display: flex; flex-direction: column; min-width: 0; }
         .primary {
           font-size: 14px; font-weight: 500; color: var(--primary-text-color);
@@ -369,7 +442,7 @@ class KettleMushroomCard extends HTMLElement {
       </style>
       <ha-card class="${heater && heater.state === "unavailable" ? "unavail" : ""}">
         <div class="top">
-          <div class="shape">${svg(ICONS.kettle, iconColor)}</div>
+          <div class="shape"><ha-icon icon="${icon}"></ha-icon></div>
           <div class="names">
             <span class="primary">${name}</span>
             <span class="secondary">${stateText}</span>

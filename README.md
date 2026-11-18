@@ -47,6 +47,10 @@ type: custom:kettle-mushroom-card
 entity: water_heater.kettle            # обязательно: сущность нагрева
 name: Чайник                           # необязательно: имя на карточке
 volume_max: 1.7                        # максимальный объём, л (по умолчанию 1.7)
+icon: mdi:kettle                       # одна иконка для всех состояний
+icon_off: mdi:kettle-off-outline       # иконка для состояния «выключен»
+icon_heating: mdi:kettle-steam         # иконка для состояния «нагрев»
+icon_unavailable: mdi:kettle-alert-outline  # иконка для состояния «недоступен»
 temperature_entity: sensor.kettle_temperature
 volume_entity: sensor.kettle_weight
 power_entity: switch.kettle_power
@@ -56,6 +60,34 @@ sound_entity: switch.kettle_sound
 backlight_entity: switch.kettle_pwk_1775cgld_backlight
 lock_entity: switch.kettle_child_lock
 ```
+
+### Иконка
+
+По умолчанию берётся иконка самой сущности (атрибут `icon`), а если её нет — `mdi:kettle`.
+
+Заменить можно по-разному:
+
+```yaml
+# одна иконка на все состояния
+icon: mdi:coffee
+
+# или разные иконки по состояниям (приоритет выше, чем icon)
+icon_off: mdi:kettle-off-outline
+icon_heating: mdi:kettle-steam
+icon_unavailable: mdi:kettle-alert-outline
+```
+
+Те же иконки можно задать словарём:
+
+```yaml
+icons:
+  default: mdi:kettle
+  off: mdi:kettle-off-outline
+  heating: mdi:kettle-steam
+  unavailable: mdi:kettle-alert-outline
+```
+
+Все эти параметры доступны и в визуальном редакторе карточки (кнопка «Изменить» → форма настроек).
 
 ### Свои названия пресетов
 
